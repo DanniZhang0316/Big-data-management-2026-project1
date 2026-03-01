@@ -164,8 +164,11 @@ Filtered out (passenger_count must be 0-8)
 
 ### Performance
 **Runtime for the full job:** 2 minutes 31 seconds  
-Screenshot 1  
-Screenshot 2
+**Total job/stage time from Spark UI**
+![Screenshot from Spark UI total job/stage time.](total_job_time.png)
+
+**Shuffle read/write from Spark UI**
+![Screenshot from Spark UI shuffle read/write for the join or aggregation stage..](shuffle%20read_write.png)
 
 c. Two concrete optimization choices you tried, and what changed.
 
