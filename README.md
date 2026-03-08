@@ -6,7 +6,7 @@ create folder and add data to work/data/inbox
 
 To run the job:  
 ``` docker compose up -d ```   
-- http://localhost:8888 for Jupyter Notebook, token bdm
+- http://localhost:8888 for Jupyter Notebook, token: bdm
   
 Run all cells  
 - http://localhost:4040 for Spark UI (open after running the notebook)
@@ -79,7 +79,6 @@ Input rows: 3,475,226
 After Cleaning Rows: 2,841,031  
 After dedup Rows: 2,841,031  
 Size: 59,158,238 bytes  
-FINAL OUTPUT?  
 
 Bad Row Examples  
 *Example 1* - Invalid trip_distance (null or ≤0): 3 rows found
@@ -123,7 +122,6 @@ Input rows: 3,577,543
 After Cleaning Rows: 2,682,815  
 After dedup Rows: 2,682,815  
 Size: 60,343,086 bytes  
-FINAL OUTPUT?
 
 Bad Row Examples  
 *Example 1* - Invalid trip_distance (null or ≤0): 3 rows found   
@@ -162,25 +160,26 @@ Filtered out (dropoff must be >= pickup)
 ```
 Filtered out (passenger_count must be 0-8)  
 
+**Counts**:  
+Total trips: 5,523,846  
+Suspicious trips found: 4,365
+
 ### Performance
-**Runtime for the full job:**   
+**Runtime for the full job:** 2 minutes, 16 seconds  
 **Total job/stage time from Spark UI**
 ![Screenshot from Spark UI total job/stage time.](total_job_time.png)
 
 **Shuffle read/write from Spark UI**
 ![Screenshot from Spark UI shuffle read/write for the join or aggregation stage..](shuffle%20read_write.png)
 
-**Optimization choices tried** 
-We optimised the suffle and it made the notebook run over three times faster
-1) Small dimension table is broadcast to avoid shuffle during join. 
+**Optimization choices** 
+1) Small dimension table is broadcast to avoid shuffle during join. This decreases the need for shuffeling and makes code run faster.
 In code: ``` zones = F.broadcast(zones) ```
-2) Decreased default shuffle partitions, as 200 is too much for our small dataset that runs on computer.
-In code: ``` spark.conf.set("spark.sql.shuffle.partitions", "8") ```  
+2) Added repartition base on pickup_date to optimize writing. This change made the the code run about 1 minute faster. 
+In code: ``` (trips_enriched_new.write.mode("append").partitionBy("pickup_date").parquet(str(OUT_PATH))) ```  
 
 ### Scenario
-Please look at the code in [project1.ipynb](work/project1.ipynb) under "CUSTOM SCENARIO: Flag suspicious trips".
+Please look at the code in [project1_repartition.ipynb](work/project1_repartition.ipynb) under "CUSTOM SCENARIO: Flag suspicious trips".
 First the new column is added. Then the trips are marked accordingly, if they are suspicious (True) or not (False). Then suspicious trips are written to: data/outbox/suspicious_trips.parquet
 
-**Counts**:  
-Total trips: 5,523,846  
-Suspicious trips found: 4,365
+
