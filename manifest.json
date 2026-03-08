@@ -1,0 +1,21 @@
+{
+  "processed_files": [
+    {
+      "filename": "yellow_tripdata_2025-01.parquet",
+      "size_bytes": 59158238,
+      "raw_row_count": 3475226,
+      "clean_row_count": 2841031,
+      "after_dedup_row_count": 2841029,
+      "processed_at": "2026-03-08T14:28:44.054694"
+    },
+    {
+      "filename": "yellow_tripdata_2025-02.parquet",
+      "size_bytes": 60343086,
+      "raw_row_count": 3577543,
+      "clean_row_count": 2682815,
+      "after_dedup_row_count": 2682815,
+      "processed_at": "2026-03-08T14:28:51.307301"
+    }
+  ],
+  "last_run": "2026-03-08T14:28:51.307339"
+}
