@@ -61,6 +61,7 @@ The dataset does not provide a unique trip identifier. Composite key for dedupli
 
 ### Incremental ingestion
 #### Manifest
+Manifest file for our project after first run: [manifest.json](manifest.json)  
 To enable incremental ingestion, a manifest file (state/manifest.json) is used to store metadata about processed input files. At runtime, the job reads the manifest file (if it exists). It lists all Parquet files in data/inbox/. Files already recorded in the manifest are skipped. Only new files are processed. The use of a manifest ensures idempotency. Re-running the job does not reprocess previously ingested files. Duplicate data is not introduced into the output. The pipeline remains deterministic and reproducible. After successfully processing new files, the manifest is updated to include their metadata. This ensures consistent state tracking across job executions.
 
 ##### The manifest records:
