@@ -4,8 +4,6 @@ Build a streaming pipeline that consumes NYC taxi events from Kafka, processes t
 with Spark Structured Streaming, and lands data into an Apache Iceberg lakehouse
 using the medallion architecture (bronze → silver → gold).
 
-Your group's custom scenario is (or will be :-)) described in your repository's GitHub issue.
-
 ---
 
 ## What's in this template
@@ -143,91 +141,6 @@ docker compose down -v       # also deletes stored Iceberg tables
 | `payment_type` | int | 1=Credit, 2=Cash, 3=No charge, 4=Dispute |
 | `congestion_surcharge` | float | |
 | *(+ other TLC fields)* | | |
-
----
-
-## SparkSession — starter configuration
-
-Paste this into the first cell of your notebook. All Iceberg and Kafka settings are
-pre-wired to the services in `compose.yml`. Credentials are read from the container
-environment (set automatically from your `.env` file).
-
-```python
-import os
-from pyspark.sql import SparkSession
-import pyspark.sql.functions as F
-
-# Packages are loaded via PYSPARK_SUBMIT_ARGS set in compose.yml.
-# pyspark-notebook:2025-12-31 ships Spark 4.1.0 — print spark.version to confirm.
-
-spark = (
-    SparkSession.builder
-    .appName("project2")
-    .master("local[*]")
-    .config("spark.sql.shuffle.partitions", "4")
-
-    # ── Iceberg ──────────────────────────────────────────────────────────────
-    .config("spark.sql.extensions",
-            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-    # Catalog named 'lakehouse' — use it as: lakehouse.<database>.<table>
-    .config("spark.sql.catalog.lakehouse",
-            "org.apache.iceberg.spark.SparkCatalog")
-    .config("spark.sql.catalog.lakehouse.type",      "rest")
-    .config("spark.sql.catalog.lakehouse.uri",       "http://iceberg-rest:8181")
-    .config("spark.sql.catalog.lakehouse.warehouse", "s3://warehouse/")
-    # S3FileIO writes data files directly to MinIO
-    .config("spark.sql.catalog.lakehouse.io-impl",
-            "org.apache.iceberg.aws.s3.S3FileIO")
-    .config("spark.sql.catalog.lakehouse.s3.endpoint",          "http://minio:9000")
-    .config("spark.sql.catalog.lakehouse.s3.path-style-access", "true")
-    .config("spark.sql.catalog.lakehouse.s3.access-key-id",     os.environ["AWS_ACCESS_KEY_ID"])
-    .config("spark.sql.catalog.lakehouse.s3.secret-access-key", os.environ["AWS_SECRET_ACCESS_KEY"])
-    .config("spark.sql.catalog.lakehouse.s3.region", "us-east-1")
-
-    .getOrCreate()
-)
-spark.sparkContext.setLogLevel("WARN")
-print(f"Spark {spark.version}   catalog: lakehouse")
-
-# ── Create your database once ──────────────────────────────────────────────
-spark.sql("CREATE DATABASE IF NOT EXISTS lakehouse.taxi")
-```
-
-### Reading from Kafka
-
-```python
-BOOTSTRAP = "kafka:9092"
-TOPIC     = "taxi-trips"
-
-raw_stream = (
-    spark.readStream
-    .format("kafka")
-    .option("kafka.bootstrap.servers", BOOTSTRAP)
-    .option("subscribe", TOPIC)
-    .option("startingOffsets", "earliest")
-    .load()
-)
-```
-
-### Loading the zone lookup table
-
-```python
-zones = spark.read.parquet("data/taxi_zone_lookup.parquet")
-zones.show(5)
-```
-
----
-
-## Grading checklist (self-review before submission)
-
-- [ ] `docker compose up` + `python produce.py` + run notebook end-to-end without errors
-- [ ] Bronze table exists and contains raw JSON rows
-- [ ] Restarting the bronze job from the same checkpoint does **not** add duplicate rows
-- [ ] Silver table has correct types, no obvious nulls in critical fields, zone names joined
-- [ ] Gold table has a clear aggregation and a justified partitioning strategy
-- [ ] Iceberg snapshot history is shown in the REPORT.md (query or screenshot)
-- [ ] REPORT.md answers all required questions (see project brief)
-- [ ] Custom scenario (see your GitHub issue) is implemented and documented
 
 ---
 
