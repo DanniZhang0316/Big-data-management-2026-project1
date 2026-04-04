@@ -99,10 +99,8 @@ PARTITIONED BY (days(hour))
 - **Trigger:** `trigger(availableNow=True)`
   Processes all messages available in Kafka at job start time, then stops. This is a one-shot bounded run suitable for batch-style execution (e.g. scheduled via cron or a notebook). It does **not** mean a single micro-batch — Spark still splits work internally. In this run it produced **3 micro-batches**, one per Kafka partition (partitions 0, 1, 2).
 
-- **Output mode:** `append`
-  Bronze only ever adds new rows — it never updates or deletes existing ones. `append` is the correct mode for an immutable raw landing table and is required by Iceberg streaming writes.
 
-📷 _Screenshot of checkpoint folder and assertion output:_
+_Screenshot of checkpoint folder and assertion output:_
 
 ![Restart proof](screenshots/restart_proof1.png)
 
@@ -120,8 +118,6 @@ The gold table is partitioned by the **day component** of the `hour` column usin
 
 **Why this column:** All analytical queries filter by date range (e.g. "trips in the last 7 days", "compare weekday vs weekend"). Partitioning on `days(hour)` means Spark can skip entire day-level directories for out-of-range dates via partition pruning — no full table scan needed.
 
-**Why `days()` and not `hours()`:** Hourly partitioning would generate 24× as many small files per day with no query benefit for day-range filters. Monthly partitioning would force single-day queries to scan a full month of data.
-
 
 **Snapshot history query:**
 ```sql
@@ -129,7 +125,7 @@ SELECT snapshot_id, committed_at, operation, summary
 FROM lakehouse.taxi.gold_hourly_trips.snapshots
 ORDER BY committed_at;
 ```
-📷 _Screenshot of snapshot history output:_
+_Screenshot of snapshot history output:_
 
 ![Snapshot history](screenshots/snapshot_history.png)
 
@@ -141,9 +137,15 @@ FOR VERSION AS OF 1198141320836554068
 LIMIT 5;
 ```
 
-📷 _Screenshot of time travel to the exact snapshot we already have:_
+_Screenshot of time travel to the exact snapshot we already have:_
 
 ![Snapshot history](screenshots/time_travel.png)
+
+
+_Screenshot of minio UI:_
+
+![Snapshot history](screenshots/minio_snapshot.png)
+
 
 ---
 
@@ -153,7 +155,6 @@ LIMIT 5;
 
 **Solution:** 
 
-If a full cost metric is required, surcharges are safely included using `coalesce` to treat nulls as zero:
 
 
 ---
