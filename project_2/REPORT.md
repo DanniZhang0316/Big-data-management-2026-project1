@@ -151,9 +151,10 @@ _Screenshot of minio UI:_
 
 ## 4. Custom scenario
 
-**Problem:** 
+**Problem:** The raw payment_type column is an opaque integer (1–5). The goal is to decode it, compute trip counts, average spend, and percentage share per type, written to a dedicated gold table.
 
-**Solution:** 
+**Solution:** Silver is grouped by payment_type, aggregated, and enriched with a label expression that maps each integer to a readable string (e.g. 1 → Credit card). The result is written with createOrReplace() so reruns are idempotent.
+The table is partitioned by payment_type — only 4–6 distinct values exist, so any filter on a single payment type hits exactly one partition.
 
 
 
