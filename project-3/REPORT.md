@@ -115,10 +115,10 @@ source tables, simulating a live application.
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| Jupyter | http://localhost:8888 | token: `admin` from `.env` |
-| Airflow | http://localhost:8080 | `admin` / `admin` from `.env` |
+| Jupyter | http://localhost:8888 | token: `JUPYTER_TOKEN` from `.env` |
+| Airflow | http://localhost:8080 | `AIRFLOW_USER` / `AIRFLOW_PASSWORD` from `.env` |
 | Spark UI | http://localhost:4040 | — |
-| MinIO Console | http://localhost:9001 | `admin` / `admin123` from `.env` |
+| MinIO Console | http://localhost:9001 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` from `.env` |
 | Kafka Connect API | http://localhost:8083 | — |
 | Iceberg REST API | http://localhost:8181/v1/namespaces | — |
 
