@@ -1,19 +1,39 @@
-def run_bronze():
-    from pyspark.sql import SparkSession, functions as F
+import os
+from pyspark.sql import SparkSession, functions as F
 
+
+def build_spark() -> SparkSession:
+    return (
+        SparkSession.builder
+        .appName("CDC-Bronze")
+        .config("spark.sql.shuffle.partitions", "4")
+
+        # Iceberg config
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+        )
+
+        .config("spark.sql.catalog.lakehouse", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.lakehouse.type", "rest")
+        .config("spark.sql.catalog.lakehouse.uri", "http://iceberg-rest:8181")
+        .config(
+            "spark.sql.catalog.lakehouse.io-impl",
+            "org.apache.iceberg.aws.s3.S3FileIO",
+        )
+        .config("spark.sql.catalog.lakehouse.s3.endpoint", "http://minio:9000")
+        .config("spark.sql.catalog.lakehouse.s3.path-style-access", "true")
+
+        # Credentials
+
+
+
+        .config("spark.sql.defaultCatalog", "lakehouse")
+        .getOrCreate()
+    )
+
+def run_bronze():
     print("🚀 Starting Bronze CDC job...")
 
-    spark = SparkSession.builder \
-        .appName("CDC-Bronze") \
-        .config("spark.sql.catalog.lakehouse", "org.apache.iceberg.spark.SparkCatalog") \
-        .config("spark.sql.catalog.lakehouse.type", "rest") \
-        .config("spark.sql.catalog.lakehouse.uri", "http://iceberg-rest:8181") \
-        .config("spark.sql.catalog.lakehouse.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") \
-        .config("spark.sql.catalog.lakehouse.s3.endpoint", "http://minio:9000") \
-        .config("spark.sql.catalog.lakehouse.s3.path-style-access", "true") \
-        .config("spark.sql.defaultCatalog", "lakehouse") \
-        .getOrCreate()
-
+    spark = build_spark()
     print("✅ Spark session created")
 
     # Create namespace
@@ -21,21 +41,23 @@ def run_bronze():
     print("✅ Namespace ensured")
 
     # Read Kafka (BATCH for testing)
-    raw = spark.read \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", "kafka:9092") \
-        .option("subscribe", "dbserver1.public.customers,dbserver1.public.drivers") \
-        .option("startingOffsets", "earliest") \
+    raw = (
+        spark.read
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "kafka:9092")
+        .option("subscribe", "dbserver1.public.customers,dbserver1.public.drivers")
+        .option("startingOffsets", "earliest")
         .load()
+    )
 
     print(f"📥 Read {raw.count()} Kafka records")
 
-    # Handle tombstones (null values)
+    # Remove tombstones
     raw_filtered = raw.filter(F.col("value").isNotNull())
 
     value_str = F.col("value").cast("string")
 
-    # Parse Debezium envelope correctly
+    # Parse Debezium envelope
     bronze_df = raw_filtered.select(
         "topic",
         F.col("partition").alias("kafka_partition"),
@@ -73,13 +95,12 @@ def run_bronze():
 
     print("✅ Iceberg table ready")
 
-    # Append-only write (correct Bronze behavior)
+    # Append-only write (Bronze = immutable log)
     bronze_df.writeTo("lakehouse.cdc.bronze_cdc").append()
 
     print("💾 Data written to Bronze table")
 
-    # Verify results immediately
-    print("📊 Preview of Bronze table:")
+    # Debug preview
     spark.sql("""
         SELECT topic, op, ts_ms, kafka_offset
         FROM lakehouse.cdc.bronze_cdc
@@ -87,8 +108,7 @@ def run_bronze():
         LIMIT 10
     """).show(truncate=False)
 
-    print("🎉 Bronze job completed successfully!")
-
+    print("🎉 Bronze job completed successfully")
 
 if __name__ == "__main__":
     run_bronze()
