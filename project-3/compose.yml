@@ -149,6 +149,7 @@ services:
       - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
       - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - _AIRFLOW_WWW_USER_CREATE=true
       - _AIRFLOW_WWW_USER_USERNAME=${AIRFLOW_USER}
       - _AIRFLOW_WWW_USER_PASSWORD=${AIRFLOW_PASSWORD}  
       # Pass connection info so DAGs can reach other services
@@ -164,11 +165,18 @@ services:
       - ./dags:/opt/airflow/dags
       - airflow-data:/opt/airflow
       - /var/run/docker.sock:/var/run/docker.sock
-    entrypoint: >
-      /bin/bash -c "
-        airflow db migrate &&
+    user: "${AIRFLOW_UID:-50000}:0"
+    entrypoint: 
+      - /bin/bash
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_USER:-admin7}" \
+          --password "${AIRFLOW_PASSWORD:-admin7}" \
+          --firstname Admin --lastname User \
+          --role Admin --email admin@example.com 2>/dev/null || true
         exec airflow standalone
-      "
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 15s
