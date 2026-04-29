@@ -2,6 +2,154 @@
 
 ## 1. CDC Correctness
 
+### Merge logic documentation
+
+The Silver layer applies CDC events using a MERGE operation based on the primary key (id):
+
+If op = 'd', the corresponding row is deleted.
+If op ∈ ('c','u','r'):
+The row is updated if it already exists.
+The row is inserted if it does not exist.
+
+Before applying the MERGE, the pipeline deduplicates records using a window function to retain only the latest event per entity (ORDER BY ts_ms DESC).
+
+### Idempotency
+
+- Deduplication ensures only the latest event per key is processed, eliminating duplicate or outdated events.
+- MERGE operates deterministically on primary keys, producing the same result for the same input.
+- DELETE operations are safe to repeat, as deleting an already deleted row has no effect.
+- UPDATE operations overwrite with the same values, resulting in no changes on re-execution.
+- INSERT operations only occur when a row does not exist, preventing duplicate records.
+
+Re-running the pipeline produces the same final state without duplications or inconsistencies.
+
+### Silver matches PostgreSQL source (compare row counts; spot-check 3+ rows).
+
+**Row count and spot-check lakehouse.cdc.silver_customers:**
+```
+spark.sql("SELECT COUNT(*) FROM lakehouse.cdc.silver_customers").show()
++--------+
+|count(1)|
++--------+
+|      10|
++--------+
+
+spark.sql("SELECT COUNT(*) FROM lakehouse.cdc.silver_drivers").show()
++--------+
+|count(1)|
++--------+
+|       8|
++--------+
+```
+```
+spark.sql("""SELECT * FROM lakehouse.cdc.silver_customers ORDER BY name ASC LIMIT 3 """).show(truncate=False)
+
++---+------------+-----------------+-------+---------------+
+|id |name        |email            |country|last_updated_ms|
++---+------------+-----------------+-------+---------------+
+|1  |Alice Mets  |alice@example.com|Estonia|1777484354013  |
+|2  |Bob Virtanen|bob@example.com  |Finland|1777484354018  |
+|3  |Carol Ozols |carol@example.com|Latvia |1777484354018  |
++---+------------+-----------------+-------+---------------+
+```
+Works also after running simulate.py some time and working hard to kill it:
+```
+spark.sql("SELECT COUNT(*) FROM lakehouse.cdc.silver_customers").show()
++--------+
+|count(1)|
++--------+
+|     120|
++--------+
+
+spark.sql("SELECT COUNT(*) FROM lakehouse.cdc.silver_drivers").show()
++--------+
+|count(1)|
++--------+
+|      37|
++--------+
+
+```
+
+
+**Row count and spot-check PostgreSQL source:**
+```
+sourcedb=# SELECT COUNT(*) FROM customers;
+ count 
+-------
+    10
+
+sourcedb=# SELECT COUNT(*) FROM drivers;
+ count 
+-------
+     8
+```
+```
+sourcedb=# SELECT * FROM customers LIMIT 3;
+
+ id |     name     |       email       | country |         created_at         
+----+--------------+-------------------+---------+----------------------------
+  1 | Alice Mets   | alice@example.com | Estonia | 2026-04-29 17:39:13.893333
+  2 | Bob Virtanen | bob@example.com   | Finland | 2026-04-29 17:39:13.893333
+  3 | Carol Ozols  | carol@example.com | Latvia  | 2026-04-29 17:39:13.893333
+```
+Works also after running simulate.py
+```
+sourcedb=# SELECT COUNT(*) FROM customers;
+ count 
+-------
+   120
+(1 row)
+
+sourcedb=# SELECT COUNT(*) FROM drivers;
+ count 
+-------
+    37
+(1 row)
+
+```
+
+
+### DELETEs in PostgreSQL are reflected as absent rows in Silver
+
+Delete a row in PostgreSQL: DELETE FROM customers WHERE id = 1; (User Alice Mets)
+
+Silver table: spark.sql("SELECT * FROM lakehouse.cdc.silver_customers WHERE id = 1").show()
+```
++---+----+-----+-------+---------------+
+| id|name|email|country|last_updated_ms|
++---+----+-----+-------+---------------+
++---+----+-----+-------+---------------+
+```
+And previous query (SELECT * FROM lakehouse.cdc.silver_customers ORDER BY name ASC LIMIT 3). Alice Mets is no more there.
+```
++---+--------------+-----------------+---------+---------------+
+|id |name          |email            |country  |last_updated_ms|
++---+--------------+-----------------+---------+---------------+
+|2  |Bob Virtanen  |bob@example.com  |Finland  |1777484354018  |
+|3  |Carol Ozols   |carol@example.com|Latvia   |1777484354018  |
+|4  |David Jonaitis|david@example.com|Lithuania|1777484354019  |
++---+--------------+-----------------+---------+---------------+
+```
+
+### Idempotency: running the DAG twice with no new changes leaves Silver unchanged (show row counts).
+
+After running CDC bronze and silver layer 5 times and quering more than 1 time existing ID-s:
+```
+spark.sql("""
+SELECT id, COUNT(*) 
+FROM lakehouse.cdc.silver_customers
+GROUP BY id
+HAVING COUNT(*) > 1
+""").show()
+```
+
+```
++---+--------+
+| id|count(1)|
++---+--------+
++---+--------+
+```
+
 ## 2. Lakehouse Design
 
 ## 3. Orchestration Design
