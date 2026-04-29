@@ -75,8 +75,8 @@ def run_silver():
     drivers = bronze_df.filter(F.col("topic") == "dbserver1.public.drivers")
 
     # Extract entity_id
-    customers = customers.withColumn("entity_id", F.get_json_object("after", "$.id"))
-    drivers = drivers.withColumn("entity_id", F.get_json_object("after", "$.id"))
+    customers = customers.withColumn("entity_id", F.coalesce(F.get_json_object("after", "$.id"), F.get_json_object("before", "$.id")))
+    drivers = drivers.withColumn("entity_id", F.coalesce(F.get_json_object("after", "$.id"), F.get_json_object("before", "$.id")))
 
     # Deduplicate (latest event per key)
     w = Window.partitionBy("entity_id").orderBy(F.col("ts_ms").desc())
