@@ -1,27 +1,46 @@
-def run_silver():
-    from pyspark.sql import SparkSession, functions as F
-    from pyspark.sql.window import Window
+import os
+from pyspark.sql import SparkSession
 
+def build_spark() -> SparkSession:
+    return (
+        SparkSession.builder
+        .appName("CDC-Silver")
+        .config("spark.sql.shuffle.partitions", "4")
+
+        # Iceberg config
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+        )
+
+        .config("spark.sql.catalog.lakehouse", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.lakehouse.type", "rest")
+        .config("spark.sql.catalog.lakehouse.uri", "http://iceberg-rest:8181")
+        .config(
+            "spark.sql.catalog.lakehouse.io-impl",
+            "org.apache.iceberg.aws.s3.S3FileIO",
+        )
+        .config("spark.sql.catalog.lakehouse.s3.endpoint", "http://minio:9000")
+        .config("spark.sql.catalog.lakehouse.s3.path-style-access", "true")
+
+        # Credentials
+
+
+
+        .config("spark.sql.defaultCatalog", "lakehouse")
+        .getOrCreate()
+    )
+
+def run_silver():
+    from pyspark.sql import functions as F
+    from pyspark.sql.window import Window
 
     print("🚀 Starting Silver CDC job...")
 
-    spark = SparkSession.builder \
-        .appName("CDC-Silver") \
-        .config("spark.sql.catalog.lakehouse", "org.apache.iceberg.spark.SparkCatalog") \
-        .config("spark.sql.catalog.lakehouse.type", "rest") \
-        .config("spark.sql.catalog.lakehouse.uri", "http://iceberg-rest:8181") \
-        .config("spark.sql.catalog.lakehouse.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") \
-        .config("spark.sql.catalog.lakehouse.s3.endpoint", "http://minio:9000") \
-        .config("spark.sql.catalog.lakehouse.s3.path-style-access", "true") \
-        .config("spark.sql.defaultCatalog", "lakehouse") \
-        .getOrCreate()
-
+    spark = build_spark()
     print("✅ Spark session created")
 
-    # Ensure namespace
+    # Namespace + tables
     spark.sql("CREATE NAMESPACE IF NOT EXISTS lakehouse.cdc")
 
-    # Create Silver tables
     spark.sql("""
         CREATE TABLE IF NOT EXISTS lakehouse.cdc.silver_customers (
             id INT,
@@ -49,7 +68,6 @@ def run_silver():
 
     # Read Bronze
     bronze_df = spark.sql("SELECT * FROM lakehouse.cdc.bronze_cdc")
-
     print(f"📥 Bronze count: {bronze_df.count()}")
 
     # Split topics
@@ -63,21 +81,22 @@ def run_silver():
     # Deduplicate (latest event per key)
     w = Window.partitionBy("entity_id").orderBy(F.col("ts_ms").desc())
 
-    latest_customers = customers \
-        .filter(F.col("op").isNotNull()) \
-        .withColumn("rn", F.row_number().over(w)) \
-        .filter("rn = 1") \
-        .drop("rn")
+    def get_latest(df):
+        return (
+            df.filter(F.col("op").isNotNull())
+            .withColumn("rn", F.row_number().over(w))
+            .filter("rn = 1")
+            .drop("rn")
+        )
 
-    latest_drivers = drivers \
-        .filter(F.col("op").isNotNull()) \
-        .withColumn("rn", F.row_number().over(w)) \
-        .filter("rn = 1") \
-        .drop("rn")
+    latest_customers = get_latest(customers)
+    latest_drivers = get_latest(drivers)
 
     print("✅ Deduplication complete")
 
-    # -------- CUSTOMERS --------
+    # ========================
+    # CUSTOMERS
+    # ========================
     customers_clean = latest_customers.select(
         F.col("entity_id").cast("int").alias("id"),
         F.get_json_object("after", "$.name").alias("name"),
@@ -109,7 +128,9 @@ def run_silver():
 
     print("✅ Customers MERGE complete")
 
-    # -------- DRIVERS --------
+    # ========================
+    # DRIVERS
+    # ========================
     drivers_clean = latest_drivers.select(
         F.col("entity_id").cast("int").alias("id"),
         F.get_json_object("after", "$.name").alias("name"),
@@ -150,7 +171,7 @@ def run_silver():
 
     print("✅ Drivers MERGE complete")
 
-    # Final check
+    # Debug output
     print("📊 Silver customers preview:")
     spark.sql("SELECT * FROM lakehouse.cdc.silver_customers ORDER BY id LIMIT 5").show(truncate=False)
 
@@ -158,7 +179,6 @@ def run_silver():
     spark.sql("SELECT * FROM lakehouse.cdc.silver_drivers ORDER BY id LIMIT 5").show(truncate=False)
 
     print("🎉 Silver job completed successfully!")
-
 
 if __name__ == "__main__":
     run_silver()
