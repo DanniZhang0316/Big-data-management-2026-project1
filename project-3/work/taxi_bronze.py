@@ -40,45 +40,63 @@ def run() -> None:
     spark = build_spark()
     spark.sparkContext.setLogLevel("WARN")
 
+    # Ensure namespace exists
     spark.sql("CREATE NAMESPACE IF NOT EXISTS lakehouse.taxi")
+    print("Namespace created")
 
-    spark.sql(
-        """
-        CREATE TABLE IF NOT EXISTS lakehouse.taxi.bronze (
-            key STRING,
-            value STRING,
-            topic STRING,
-            partition INT,
-            offset BIGINT,
-            kafka_timestamp TIMESTAMP
+    # ═══════════════════════════════════════════════════════════
+    # READ FROM PARQUET FILES (not Kafka!)
+    # ═══════════════════════════════════════════════════════════
+    base_path = os.environ.get("PROJECT_HOME", "/home/jovyan/project")
+    parquet_path = os.path.join(base_path, "data", "yellow_tripdata_2025-01.parquet")
+    
+    print(f"Reading parquet from: {parquet_path}")
+    
+    raw_df = spark.read.parquet(parquet_path)
+    print(f"Read {raw_df.count()} rows from parquet")
+
+    # ═══════════════════════════════════════════════════════════
+    # ADD trip_id COLUMN (required for Task 3 joins)
+    # ═══════════════════════════════════════════════════════════
+    bronze_df = raw_df.withColumn("trip_id", F.monotonically_increasing_id())
+
+    # ═══════════════════════════════════════════════════════════
+    # CREATE BRONZE TABLE (note the name: bronze_trips, not bronze)
+    # ═══════════════════════════════════════════════════════════
+    spark.sql("""
+        CREATE TABLE IF NOT EXISTS lakehouse.taxi.bronze_trips (
+            VendorID INT,
+            tpep_pickup_datetime STRING,
+            tpep_dropoff_datetime STRING,
+            passenger_count DOUBLE,
+            trip_distance DOUBLE,
+            RatecodeID DOUBLE,
+            store_and_fwd_flag STRING,
+            PULocationID INT,
+            DOLocationID INT,
+            payment_type INT,
+            fare_amount DOUBLE,
+            extra DOUBLE,
+            mta_tax DOUBLE,
+            tip_amount DOUBLE,
+            tolls_amount DOUBLE,
+            improvement_surcharge DOUBLE,
+            total_amount DOUBLE,
+            congestion_surcharge DOUBLE,
+            Airport_fee DOUBLE,
+            cbd_congestion_fee DOUBLE,
+            trip_id BIGINT
         ) USING iceberg
-        """
-    )
+    """)
+    print("Bronze table schema created")
 
-    bootstrap = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
-    topic = os.environ.get("KAFKA_TOPIC", "taxi-trips")
+    # Write to Bronze (append-only)
+    bronze_df.writeTo("lakehouse.taxi.bronze_trips").append()
+    print("Data written to Bronze")
 
-    raw = (
-        spark.read.format("kafka")
-        .option("kafka.bootstrap.servers", bootstrap)
-        .option("subscribe", topic)
-        .option("startingOffsets", "earliest")
-        .load()
-    )
-
-    bronze_df = raw.select(
-        F.col("key").cast("string"),
-        F.col("value").cast("string"),
-        F.col("topic"),
-        F.col("partition"),
-        F.col("offset"),
-        F.col("timestamp").alias("kafka_timestamp"),
-    )
-
-    bronze_df.writeTo("lakehouse.taxi.bronze").append()
-
-    # Basic validation for quick checks in logs.
-    spark.sql("SELECT count(*) AS n FROM lakehouse.taxi.bronze").show()
+    # Validation
+    count = spark.sql("SELECT count(*) AS n FROM lakehouse.taxi.bronze_trips").collect()[0][0]
+    print(f"Bronze table now has {count} rows")
 
 
 if __name__ == "__main__":

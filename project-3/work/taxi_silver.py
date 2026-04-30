@@ -1,12 +1,6 @@
 import os
 from pyspark.sql import SparkSession, functions as F
-from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    IntegerType,
-    DoubleType,
-)
+from pyspark.sql.types import IntegerType
 
 
 def build_spark() -> SparkSession:
@@ -49,63 +43,40 @@ def run() -> None:
 
     spark.sql("CREATE NAMESPACE IF NOT EXISTS lakehouse.taxi")
 
-    trip_schema = StructType(
-        [
-            StructField("VendorID", IntegerType()),
-            StructField("tpep_pickup_datetime", StringType()),
-            StructField("tpep_dropoff_datetime", StringType()),
-            StructField("passenger_count", DoubleType()),
-            StructField("trip_distance", DoubleType()),
-            StructField("RatecodeID", DoubleType()),
-            StructField("store_and_fwd_flag", StringType()),
-            StructField("PULocationID", IntegerType()),
-            StructField("DOLocationID", IntegerType()),
-            StructField("payment_type", IntegerType()),
-            StructField("fare_amount", DoubleType()),
-            StructField("extra", DoubleType()),
-            StructField("mta_tax", DoubleType()),
-            StructField("tip_amount", DoubleType()),
-            StructField("tolls_amount", DoubleType()),
-            StructField("improvement_surcharge", DoubleType()),
-            StructField("total_amount", DoubleType()),
-            StructField("congestion_surcharge", DoubleType()),
-            StructField("Airport_fee", DoubleType()),
-            StructField("cbd_congestion_fee", DoubleType()),
-        ]
+    # ═══════════════════════════════════════════════════════════
+    # READ FROM bronze_trips (not bronze!)
+    # ═══════════════════════════════════════════════════════════
+    bronze_df = spark.read.table("lakehouse.taxi.bronze_trips")
+    print(f"📥 Read {bronze_df.count()} rows from Bronze")
+
+    # Parse and clean data with proper types
+    parsed = bronze_df.select(
+        F.col("trip_id"),  # ✅ Keep trip_id for Task 3 joins
+        F.col("VendorID").alias("vendor_id"),
+        F.to_timestamp("tpep_pickup_datetime").alias("pickup_datetime"),
+        F.to_timestamp("tpep_dropoff_datetime").alias("dropoff_datetime"),
+        F.col("passenger_count").cast(IntegerType()).alias("passenger_count"),
+        F.col("trip_distance"),
+        F.col("RatecodeID").cast(IntegerType()).alias("rate_code_id"),
+        F.col("store_and_fwd_flag"),
+        F.col("PULocationID").alias("pu_location_id"),
+        F.col("DOLocationID").alias("do_location_id"),
+        F.col("payment_type"),
+        F.col("fare_amount"),
+        F.col("extra"),
+        F.col("mta_tax"),
+        F.col("tip_amount"),
+        F.col("tolls_amount"),
+        F.col("improvement_surcharge"),
+        F.col("total_amount"),
+        F.col("congestion_surcharge"),
+        F.col("Airport_fee").alias("airport_fee"),
+        F.col("cbd_congestion_fee"),
     )
 
-    bronze_df = spark.read.table("lakehouse.taxi.bronze")
-
-    parsed = (
-        bronze_df.select(
-            F.from_json(F.col("value"), trip_schema).alias("t"),
-            F.col("kafka_timestamp"),
-        )
-        .select(
-            F.col("t.VendorID").alias("vendor_id"),
-            F.to_timestamp("t.tpep_pickup_datetime").alias("pickup_datetime"),
-            F.to_timestamp("t.tpep_dropoff_datetime").alias("dropoff_datetime"),
-            F.col("t.passenger_count").cast(IntegerType()).alias("passenger_count"),
-            F.col("t.trip_distance").alias("trip_distance"),
-            F.col("t.RatecodeID").cast(IntegerType()).alias("rate_code_id"),
-            F.col("t.store_and_fwd_flag").alias("store_and_fwd_flag"),
-            F.col("t.PULocationID").alias("pu_location_id"),
-            F.col("t.DOLocationID").alias("do_location_id"),
-            F.col("t.payment_type").alias("payment_type"),
-            F.col("t.fare_amount").alias("fare_amount"),
-            F.col("t.extra").alias("extra"),
-            F.col("t.mta_tax").alias("mta_tax"),
-            F.col("t.tip_amount").alias("tip_amount"),
-            F.col("t.tolls_amount").alias("tolls_amount"),
-            F.col("t.improvement_surcharge").alias("improvement_surcharge"),
-            F.col("t.total_amount").alias("total_amount"),
-            F.col("t.congestion_surcharge").alias("congestion_surcharge"),
-            F.col("t.Airport_fee").alias("airport_fee"),
-            F.col("t.cbd_congestion_fee").alias("cbd_congestion_fee"),
-            F.col("kafka_timestamp"),
-        )
-    )
-
+    # ═══════════════════════════════════════════════════════════
+    # FILTER INVALID ROWS (Task 2 requirement)
+    # ═══════════════════════════════════════════════════════════
     cleaned = parsed.filter(
         F.col("vendor_id").isNotNull()
         & F.col("pickup_datetime").isNotNull()
@@ -113,12 +84,15 @@ def run() -> None:
         & F.col("pu_location_id").isNotNull()
         & F.col("do_location_id").isNotNull()
         & F.col("passenger_count").between(1, 6)
-        & (F.col("trip_distance") > 0)
-        & (F.col("fare_amount") > 0)
+        & (F.col("trip_distance") > 0)      # ✅ Filter trip_distance <= 0
+        & (F.col("fare_amount") > 0)        # ✅ Filter fare_amount <= 0
         & (F.col("total_amount") > 0)
         & (F.col("dropoff_datetime") > F.col("pickup_datetime"))
     )
 
+    print(f"🧹 After filtering: {cleaned.count()} rows")
+
+    # Deduplicate
     deduped = cleaned.dropDuplicates(
         [
             "vendor_id",
@@ -129,6 +103,7 @@ def run() -> None:
         ]
     )
 
+    # Enrich with zone names
     base_path = os.environ.get("PROJECT_HOME", "/home/jovyan/project")
     zones_path = os.path.join(base_path, "data", "taxi_zone_lookup.parquet")
     zones = spark.read.parquet(zones_path)
@@ -151,10 +126,15 @@ def run() -> None:
         .drop("_do_id")
     )
 
-    silver_df.writeTo("lakehouse.taxi.silver").createOrReplace()
+    # ═══════════════════════════════════════════════════════════
+    # WRITE TO silver_trips (not silver!)
+    # ═══════════════════════════════════════════════════════════
+    silver_df.writeTo("lakehouse.taxi.silver_trips").createOrReplace()
+    print("💾 Data written to Silver")
 
-    # Basic validation for quick checks in logs.
-    spark.sql("SELECT count(*) AS n FROM lakehouse.taxi.silver").show()
+    # Validation
+    count = spark.sql("SELECT count(*) AS n FROM lakehouse.taxi.silver_trips").collect()[0][0]
+    print(f"✅ Silver table now has {count} rows")
 
 
 if __name__ == "__main__":
