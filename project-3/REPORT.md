@@ -135,12 +135,7 @@ And previous query (SELECT * FROM lakehouse.cdc.silver_customers ORDER BY name A
 
 After running CDC bronze and silver layer 5 times and quering more than 1 time existing ID-s:
 ```
-spark.sql("""
-SELECT id, COUNT(*) 
-FROM lakehouse.cdc.silver_customers
-GROUP BY id
-HAVING COUNT(*) > 1
-""").show()
+spark.sql("""SELECT id, COUNT(*) FROM lakehouse.cdc.silver_customers GROUP BY id HAVING COUNT(*) > 1""").show()
 ```
 
 ```
