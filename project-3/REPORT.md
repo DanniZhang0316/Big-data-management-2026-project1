@@ -152,6 +152,92 @@ HAVING COUNT(*) > 1
 
 ## 2. Lakehouse Design
 
+### Schema of each table: Bronze CDC, Silver CDC, Bronze taxi, Silver taxi, Gold — and why each differs from the previous layer.
+
+#### Bronze CDC, Silver CDC
+Tabels differ, because bronze layer has all raw rows Debezium. Silver layer has table for customers and drivers and the data is cleaned. Silver layer stores latest state per entity. 
+
+```
+lakehouse.cdc.bronze_cdc
+root
+ |-- topic: string (nullable = true)
+ |-- kafka_partition: integer (nullable = true)
+ |-- kafka_offset: long (nullable = true)
+ |-- kafka_timestamp: timestamp (nullable = true)
+ |-- op: string (nullable = true)
+ |-- ts_ms: long (nullable = true)
+ |-- lsn: long (nullable = true)
+ |-- before: string (nullable = true)
+ |-- after: string (nullable = true)
+```
+
+```
+lakehouse.cdc.silver_customers
+ |-- id: integer (nullable = true)
+ |-- name: string (nullable = true)
+ |-- email: string (nullable = true)
+ |-- country: string (nullable = true)
+ |-- last_updated_ms: long (nullable = true)
+```
+
+```
+lakehouse.cdc.silver_drivers
+root
+ |-- id: integer (nullable = true)
+ |-- name: string (nullable = true)
+ |-- license_number: string (nullable = true)
+ |-- rating: double (nullable = true)
+ |-- city: string (nullable = true)
+ |-- active: boolean (nullable = true)
+ |-- created_at: string (nullable = true)
+ |-- last_updated_ms: long (nullable = true)
+```
+
+#### Iceberg snapshot history for Silver CDC (query showing multiple MERGE snapshots).
+```
+spark.sql("SELECT * FROM lakehouse.cdc.silver_customers.history").show()
++--------------------+-------------------+-------------------+-------------------+
+|     made_current_at|        snapshot_id|          parent_id|is_current_ancestor|
++--------------------+-------------------+-------------------+-------------------+
+|2026-05-01 08:48:...|6007516179617277881|               NULL|               true|
+|2026-05-01 11:22:...|7939841747190356258|6007516179617277881|               true|
+|2026-05-01 11:29:...|1475400092160512281|7939841747190356258|               true|
++--------------------+-------------------+-------------------+-------------------+
+```
+
+#### Time-travel: Silver CDC at a snapshot before a first MERGE.
+
+Getting current snapshot ID's:
+```
+spark.sql("SELECT snapshot_id, made_current_at FROM lakehouse.cdc.silver_customers.history").show()
++-------------------+--------------------+
+|        snapshot_id|     made_current_at|
++-------------------+--------------------+
+|6007516179617277881|2026-05-01 08:48:...|
+|7939841747190356258|2026-05-01 11:22:...|
+|1475400092160512281|2026-05-01 11:29:...|
++-------------------+--------------------+
+```
+Quering snapshot whit ID 6007516179617277881 (first snapshot before starting simulate.py).
+```
+spark.sql("SELECT * FROM lakehouse.cdc.silver_customers VERSION AS OF 7939841747190356258").show()
++---+--------------+------------------+-----------+---------------+
+| id|          name|             email|    country|last_updated_ms|
++---+--------------+------------------+-----------+---------------+
+|  6|  Frank Muller| frank@example.com|    Germany|  1777624988039|
+|  9| Ingrid Larsen|ingrid@example.com|     Norway|  1777624988040|
+| 10| Javier Garcia|javier@example.com|      Spain|  1777624988040|
+|  2|  Bob Virtanen|   bob@example.com|    Finland|  1777624988036|
+|  4|David Jonaitis| david@example.com|  Lithuania|  1777624988038|
+|  5|  Eva Svensson|   eva@example.com|     Sweden|  1777624988038|
+|  1|    Alice Mets| alice@example.com|    Estonia|  1777624988021|
+|  3|   Carol Ozols| carol@example.com|     Latvia|  1777624988037|
+|  7|     Grace Kim| grace@example.com|South Korea|  1777624988039|
+|  8|   Hiro Tanaka|  hiro@example.com|      Japan|  1777624988039|
++---+--------------+------------------+-----------+---------------+
+```
+
+
 ## 3. Orchestration Design
 
 ## 4. Taxi Pipeline
