@@ -300,9 +300,7 @@ Re-running produces the same final state with no duplicates.
 
 ### **DAG Run History**
 
-![Grid View - Successful Runs](screenshots/dag_grid_view.png)
-
-The Grid view shows multiple successful runs with all 7 tasks completing:
+![Grid View - Successful Runs](screenshots/dag_runs_history.png)
 
 | Run | Start Time (UTC) | Duration | Status |
 |-----|-----------------|----------|---------|
@@ -361,6 +359,69 @@ The query output for `gold_customer_activity` is available in the notebook [`gol
 ![Gold customer churn](gold_customer_churn.png)
 
 
+
+
+### **DAG Structure**
+
+The Airflow DAG orchestrates two parallel pipelines with 6 tasks:
+
+**CDC Pipeline:**
+```
+connector_health → run_bronze_cdc → run_silver_cdc
+```
+
+**Taxi Pipeline:**
+```
+run_bronze_taxi → run_silver_taxi → run_gold_taxi
+```
+
+![DAG Graph](screenshots/dag_graph.png)
+
+---
+
+### **Task Descriptions**
+
+| Task | Type | Purpose |
+|------|------|---------|
+| `connector_health` | HttpSensor | Checks Debezium connector is RUNNING before CDC tasks execute |
+| `run_bronze_cdc` | BashOperator | Reads CDC events from Kafka → `lakehouse.cdc.bronze_cdc` |
+| `run_silver_cdc` | BashOperator | Applies MERGE logic → `lakehouse.cdc.silver_customers/drivers` |
+| `run_bronze_taxi` | BashOperator | Loads parquet with trip_id → `lakehouse.taxi.bronze_trips` |
+| `run_silver_taxi` | BashOperator | Cleans, filters, enriches with zones → `lakehouse.taxi.silver_trips` |
+| `run_gold_taxi` | BashOperator | Hourly aggregations by zone → `lakehouse.taxi.gold_hourly_trips` |
+
+---
+
+### **Scheduling**
+
+**Schedule:** `None` (manual trigger)
+
+Manual triggering provides full control for testing and avoids overwhelming the local Docker environment. In production, this would use `schedule='@hourly'` to support a 1-hour freshness SLA.
+
+---
+
+### **Retry Configuration**
+
+```python
+'retries': 1,
+'retry_delay': timedelta(minutes=2)
+```
+
+Each task automatically retries once after 2 minutes if it fails, handling transient network or resource issues.
+
+---
+
+### **Idempotency**
+
+The pipeline is idempotent through:
+- **Bronze:** Append-only (duplicates handled in Silver)
+- **Silver CDC:** MERGE with deduplication by latest `ts_ms`
+- **Silver Taxi:** `createOrReplace()` with consistent filtering
+- **Gold:** Aggregations recalculated from Silver
+
+Re-running produces the same final state with no duplicates.
+
+---
 
 
 ### **DAG Structure**
