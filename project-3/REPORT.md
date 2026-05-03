@@ -188,6 +188,75 @@ root
  |-- last_updated_ms: long (nullable = true)
 ```
 
+#### Bronze taxi, Silver taxi, Gold taxi
+Tables differ because each layer increases structure and business meaning. Bronze keeps the raw parquet columns plus a generated trip_id, Silver cleans types, removes invalid rows, and enriches with zone names, Gold aggregates for analytics.
+
+```
+lakehouse.taxi.bronze_trips
+root
+ |-- VendorID: integer (nullable = true)
+ |-- tpep_pickup_datetime: string (nullable = true)
+ |-- tpep_dropoff_datetime: string (nullable = true)
+ |-- passenger_count: double (nullable = true)
+ |-- trip_distance: double (nullable = true)
+ |-- RatecodeID: double (nullable = true)
+ |-- store_and_fwd_flag: string (nullable = true)
+ |-- PULocationID: integer (nullable = true)
+ |-- DOLocationID: integer (nullable = true)
+ |-- payment_type: integer (nullable = true)
+ |-- fare_amount: double (nullable = true)
+ |-- extra: double (nullable = true)
+ |-- mta_tax: double (nullable = true)
+ |-- tip_amount: double (nullable = true)
+ |-- tolls_amount: double (nullable = true)
+ |-- improvement_surcharge: double (nullable = true)
+ |-- total_amount: double (nullable = true)
+ |-- congestion_surcharge: double (nullable = true)
+ |-- Airport_fee: double (nullable = true)
+ |-- cbd_congestion_fee: double (nullable = true)
+ |-- trip_id: long (nullable = true)
+```
+
+```
+lakehouse.taxi.silver_trips
+root
+ |-- trip_id: long (nullable = true)
+ |-- vendor_id: integer (nullable = true)
+ |-- pickup_datetime: timestamp (nullable = true)
+ |-- dropoff_datetime: timestamp (nullable = true)
+ |-- passenger_count: integer (nullable = true)
+ |-- trip_distance: double (nullable = true)
+ |-- rate_code_id: integer (nullable = true)
+ |-- store_and_fwd_flag: string (nullable = true)
+ |-- pu_location_id: integer (nullable = true)
+ |-- do_location_id: integer (nullable = true)
+ |-- payment_type: integer (nullable = true)
+ |-- fare_amount: double (nullable = true)
+ |-- extra: double (nullable = true)
+ |-- mta_tax: double (nullable = true)
+ |-- tip_amount: double (nullable = true)
+ |-- tolls_amount: double (nullable = true)
+ |-- improvement_surcharge: double (nullable = true)
+ |-- total_amount: double (nullable = true)
+ |-- congestion_surcharge: double (nullable = true)
+ |-- airport_fee: double (nullable = true)
+ |-- cbd_congestion_fee: double (nullable = true)
+ |-- pickup_zone: string (nullable = true)
+ |-- pickup_borough: string (nullable = true)
+ |-- dropoff_zone: string (nullable = true)
+ |-- dropoff_borough: string (nullable = true)
+```
+
+```
+lakehouse.taxi.gold_hourly_trips
+root
+ |-- pickup_zone: string (nullable = true)
+ |-- hour: timestamp (nullable = true)
+ |-- trip_count: long (nullable = true)
+ |-- avg_fare: double (nullable = true)
+ |-- avg_distance: double (nullable = true)
+```
+
 #### Iceberg snapshot history for Silver CDC (query showing multiple MERGE snapshots).
 ```
 spark.sql("SELECT * FROM lakehouse.cdc.silver_customers.history").show()
@@ -328,6 +397,104 @@ After optimization, task succeeded consistently. Airflow's retry mechanism handl
 **Additional Issue:** `run_gold_customer_activity` initially failed due to missing S3 credentials in Spark configuration. Fixed by adding `s3.access-key-id` and `s3.secret-access-key` configs matching the working `taxi_gold.py` implementation.
 
 ## 4. Taxi Pipeline
+
+### Bronze taxi
+
+Bronze reads from the parquet trip data and stores the raw columns with a generated `trip_id` for downstream joins. The schema is kept close to the source file to preserve all raw fields.
+
+Key properties:
+- Append-only Iceberg table
+- Generated `trip_id` (monotonically increasing)
+- No cleaning or filtering
+
+### Silver taxi
+
+Silver parses and cleans the raw records and enriches with zone names. Cleaning steps:
+- Parse `pickup_datetime` and `dropoff_datetime` into timestamps
+- Cast numeric fields (`passenger_count`, `trip_distance`, `fare_amount`, `total_amount`)
+- Drop invalid rows (negative distance/fare, missing timestamps, zero passengers)
+- Enrich with taxi zone lookup to add `pickup_zone` and `dropoff_zone`
+
+Improvement over Project 2:
+- Added de-duplication on a stable key (`vendor_id`, `pickup_datetime`, `pu_location_id`, `do_location_id`, `fare_amount`) to prevent duplicates from replays.
+
+### Gold taxi
+
+Gold aggregates Silver for analytics. The job computes hourly demand per pickup zone and average fare and distance:
+
+- `pickup_hour` = date_trunc('hour', pickup_datetime)
+- `trip_count` per hour and zone
+- `avg_fare` and `avg_distance` for trend analysis
+
+Gold tables are recreated from Silver on each run, so re-running the DAG is idempotent and produces the same aggregates for the same input.
+
+### Taxi correctness (queries and outputs)
+
+**Bronze row count and sample:**
+```
+spark.sql("SELECT COUNT(*) FROM lakehouse.taxi.bronze_trips").show()
+spark.sql("SELECT VendorID, tpep_pickup_datetime, PULocationID, DOLocationID, total_amount FROM lakehouse.taxi.bronze_trips LIMIT 5").show(truncate=False)
+
++-------+
+|  count|
++-------+
+|3475226|
++-------+
+
++--------+--------------------+------------+------------+------------+
+|VendorID|tpep_pickup_datetime|PULocationID|DOLocationID|total_amount|
++--------+--------------------+------------+------------+------------+
+|1       |2025-01-01 00:18:38 |229         |237         |18.0        |
+|1       |2025-01-01 00:32:40 |236         |237         |12.12       |
+|1       |2025-01-01 00:44:04 |141         |141         |12.1        |
+|2       |2025-01-01 00:14:27 |244         |244         |9.7         |
+|2       |2025-01-01 00:21:34 |244         |116         |8.3         |
++--------+--------------------+------------+------------+------------+
+```
+
+**Silver row count and sample:**
+```
+spark.sql("SELECT COUNT(*) FROM lakehouse.taxi.silver_trips").show()
+spark.sql("SELECT trip_id, pickup_datetime, dropoff_datetime, pickup_zone, dropoff_zone, total_amount FROM lakehouse.taxi.silver_trips LIMIT 5").show(truncate=False)
+
++-------+
+|  count|
++-------+
+|2815410|
++-------+
+
++-----------+-------------------+-------------------+-----------------------+-------------------------+------------+
+|trip_id    |pickup_datetime    |dropoff_datetime   |pickup_zone            |dropoff_zone             |total_amount|
++-----------+-------------------+-------------------+-----------------------+-------------------------+------------+
+|51539927419|2025-01-15 23:51:44|2025-01-16 00:27:12|Newark Airport         |Times Sq/Theatre District|102.01      |
+|17179895943|2025-01-01 09:40:38|2025-01-01 09:50:33|Allerton/Pelham Gardens|Eastchester              |17.0        |
+|17179894742|2025-01-01 08:29:15|2025-01-01 09:06:27|Allerton/Pelham Gardens|Bronxdale                |18.0        |
+|17179958933|2025-01-02 10:59:23|2025-01-02 11:16:04|Allerton/Pelham Gardens|Van Nest/Morris Park     |20.0        |
+|85899882621|2025-01-29 09:13:03|2025-01-29 09:42:18|Allerton/Pelham Gardens|Van Nest/Morris Park     |23.0        |
++-----------+-------------------+-------------------+-----------------------+-------------------------+------------+
+```
+
+**Gold aggregates sample:**
+```
+spark.sql("SELECT COUNT(*) FROM lakehouse.taxi.gold_hourly_trips").show()
+spark.sql("SELECT pickup_zone, hour, trip_count, avg_fare, avg_distance FROM lakehouse.taxi.gold_hourly_trips ORDER BY hour DESC LIMIT 5").show(truncate=False)
+
++-----+
+|count|
++-----+
+|72847|
++-----+
+
++-----------------------+-------------------+----------+--------+------------+
+|pickup_zone            |hour               |trip_count|avg_fare|avg_distance|
++-----------------------+-------------------+----------+--------+------------+
+|Greenwich Village North|2025-02-01 00:00:00|1         |6.5     |1.04        |
+|Seaport                |2025-01-31 23:00:00|11        |15.98   |2.75        |
+|TriBeCa/Civic Center   |2025-01-31 23:00:00|86        |14.83   |2.54        |
+|Gramercy               |2025-01-31 23:00:00|171       |13.39   |2.1         |
+|Alphabet City          |2025-01-31 23:00:00|30        |13.94   |2.25        |
++-----------------------+-------------------+----------+--------+------------+
+```
 
 ## 5. Custom Scenario
 
