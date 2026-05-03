@@ -260,10 +260,10 @@ The query output for `gold_customer_activity` is available in the notebook [`gol
 
 #### Task 3 Scenario Table
 
-![Task 3 scenario table](gold_customer_activity.png)
+![Gold customer activity](gold_customer_activity.png)
 
 #### Gold Customer Churn Query Result
 
-![Gold customer churn query result](gold_customer_churn.png)
+![Gold customer churn](gold_customer_churn.png)
 
 
