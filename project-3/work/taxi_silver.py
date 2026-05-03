@@ -7,8 +7,13 @@ def build_spark() -> SparkSession:
     return (
         SparkSession.builder
         .appName("taxi-silver")
-        .master("local[*]")
-        .config("spark.sql.shuffle.partitions", "4")
+        .master("local[2]")
+        .config("spark.driver.memory", "3g")
+        .config("spark.sql.shuffle.partitions", "50")
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        .config("spark.sql.autoBroadcastJoinThreshold", "52428800")
+        .config("spark.driver.maxResultSize", "1g")
         .config(
             "spark.sql.extensions",
             "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
@@ -43,15 +48,13 @@ def run() -> None:
 
     spark.sql("CREATE NAMESPACE IF NOT EXISTS lakehouse.taxi")
 
-    # ═══════════════════════════════════════════════════════════
-    # READ FROM bronze_trips (not bronze!)
-    # ═══════════════════════════════════════════════════════════
+    # READ FROM bronze_trips
+    print("📥 Reading from Bronze...")
     bronze_df = spark.read.table("lakehouse.taxi.bronze_trips")
-    print(f"📥 Read {bronze_df.count()} rows from Bronze")
 
     # Parse and clean data with proper types
     parsed = bronze_df.select(
-        F.col("trip_id"),  # ✅ Keep trip_id for Task 3 joins
+        F.col("trip_id"),
         F.col("VendorID").alias("vendor_id"),
         F.to_timestamp("tpep_pickup_datetime").alias("pickup_datetime"),
         F.to_timestamp("tpep_dropoff_datetime").alias("dropoff_datetime"),
@@ -74,9 +77,8 @@ def run() -> None:
         F.col("cbd_congestion_fee"),
     )
 
-    # ═══════════════════════════════════════════════════════════
-    # FILTER INVALID ROWS (Task 2 requirement)
-    # ═══════════════════════════════════════════════════════════
+    # FILTER INVALID ROWS
+    print("🧹 Filtering invalid rows...")
     cleaned = parsed.filter(
         F.col("vendor_id").isNotNull()
         & F.col("pickup_datetime").isNotNull()
@@ -84,15 +86,14 @@ def run() -> None:
         & F.col("pu_location_id").isNotNull()
         & F.col("do_location_id").isNotNull()
         & F.col("passenger_count").between(1, 6)
-        & (F.col("trip_distance") > 0)      # ✅ Filter trip_distance <= 0
-        & (F.col("fare_amount") > 0)        # ✅ Filter fare_amount <= 0
+        & (F.col("trip_distance") > 0)
+        & (F.col("fare_amount") > 0)
         & (F.col("total_amount") > 0)
         & (F.col("dropoff_datetime") > F.col("pickup_datetime"))
     )
 
-    print(f"🧹 After filtering: {cleaned.count()} rows")
-
     # Deduplicate
+    print("🔄 Deduplicating...")
     deduped = cleaned.dropDuplicates(
         [
             "vendor_id",
@@ -104,6 +105,7 @@ def run() -> None:
     )
 
     # Enrich with zone names
+    print("🌍 Enriching with zone data...")
     base_path = os.environ.get("PROJECT_HOME", "/home/jovyan/project")
     zones_path = os.path.join(base_path, "data", "taxi_zone_lookup.parquet")
     zones = spark.read.parquet(zones_path)
@@ -120,21 +122,17 @@ def run() -> None:
     )
 
     silver_df = (
-        deduped.join(pu_zones, deduped.pu_location_id == F.col("_pu_id"), "left")
+        deduped.join(F.broadcast(pu_zones), deduped.pu_location_id == F.col("_pu_id"), "left")
         .drop("_pu_id")
-        .join(do_zones, deduped.do_location_id == F.col("_do_id"), "left")
+        .join(F.broadcast(do_zones), deduped.do_location_id == F.col("_do_id"), "left")
         .drop("_do_id")
     )
 
-    # ═══════════════════════════════════════════════════════════
-    # WRITE TO silver_trips (not silver!)
-    # ═══════════════════════════════════════════════════════════
+    # WRITE TO silver_trips (without counting - saves memory!)
+    print("💾 Writing to Silver table...")
     silver_df.writeTo("lakehouse.taxi.silver_trips").createOrReplace()
-    print("💾 Data written to Silver")
 
-    # Validation
-    count = spark.sql("SELECT count(*) AS n FROM lakehouse.taxi.silver_trips").collect()[0][0]
-    print(f"✅ Silver table now has {count} rows")
+    print("✅ Taxi Silver transformation complete!")
 
 
 if __name__ == "__main__":

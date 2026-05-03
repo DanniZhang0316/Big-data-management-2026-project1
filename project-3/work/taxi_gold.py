@@ -6,8 +6,12 @@ def build_spark() -> SparkSession:
     return (
         SparkSession.builder
         .appName("taxi-gold")
-        .master("local[*]")
-        .config("spark.sql.shuffle.partitions", "4")
+        .master("local[2]")
+        .config("spark.driver.memory", "2g")
+        .config("spark.sql.shuffle.partitions", "50")
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        .config("spark.driver.maxResultSize", "1g")
         .config(
             "spark.sql.extensions",
             "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
@@ -42,9 +46,10 @@ def run() -> None:
 
     spark.sql("CREATE NAMESPACE IF NOT EXISTS lakehouse.taxi")
 
+    # Create Gold table schema
     spark.sql(
         """
-        CREATE OR REPLACE TABLE lakehouse.taxi.gold_hourly_trips (
+        CREATE TABLE IF NOT EXISTS lakehouse.taxi.gold_hourly_trips (
             pickup_zone STRING,
             hour TIMESTAMP,
             trip_count BIGINT,
@@ -55,8 +60,11 @@ def run() -> None:
         """
     )
 
+    print("📥 Reading from Silver trips table...")
+    
+    # Read from silver_trips and aggregate
     gold_df = (
-        spark.table("lakehouse.taxi.silver")
+        spark.table("lakehouse.taxi.silver_trips")
         .withColumn("hour", F.date_trunc("hour", "pickup_datetime"))
         .groupBy("pickup_zone", "hour")
         .agg(
@@ -66,10 +74,10 @@ def run() -> None:
         )
     )
 
+    print("💾 Writing Gold aggregations...")
     gold_df.writeTo("lakehouse.taxi.gold_hourly_trips").createOrReplace()
 
-    # Basic validation for quick checks in logs.
-    spark.sql("SELECT count(*) AS n FROM lakehouse.taxi.gold_hourly_trips").show()
+    print("✅ Taxi Gold job completed successfully")
 
 
 if __name__ == "__main__":
