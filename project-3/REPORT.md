@@ -249,7 +249,7 @@ connector_health → run_bronze_cdc → run_silver_cdc → run_gold_customer_act
 run_bronze_taxi → run_silver_taxi → run_gold_taxi
 ```
 
-![DAG Grid View](screenshots/dag_grid_view.png)
+![DAG Graph View](screenshots/dag_graph.png)
 
 ---
 
@@ -300,7 +300,7 @@ Re-running produces the same final state with no duplicates.
 
 ### **DAG Run History**
 
-![Grid View - Successful Runs](screenshots/dag_runs_history.png)
+![View - Successful Runs](screenshots/dag_runs_history.png)
 
 | Run | Start Time (UTC) | Duration | Status |
 |-----|-----------------|----------|---------|
