@@ -258,11 +258,11 @@ The pipeline produced **1,156 customer activity records** and correctly identifi
 
 The query output for `gold_customer_activity` is available in the notebook [`gold_customer_activity.ipynb`](gold_customer_activity.ipynb). To keep the terminal output clean, the print statement was removed from `gold_customer_activity.py`.
 
-#### Task 3 Scenario Table
+#### Gold Customer activity table
 
 ![Gold customer activity](gold_customer_activity.png)
 
-#### Gold Customer Churn Query Result
+#### Gold Customer Churn table
 
 ![Gold customer churn](gold_customer_churn.png)
 
