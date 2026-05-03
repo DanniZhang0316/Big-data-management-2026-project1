@@ -135,12 +135,7 @@ And previous query (SELECT * FROM lakehouse.cdc.silver_customers ORDER BY name A
 
 After running CDC bronze and silver layer 5 times and quering more than 1 time existing ID-s:
 ```
-spark.sql("""
-SELECT id, COUNT(*) 
-FROM lakehouse.cdc.silver_customers
-GROUP BY id
-HAVING COUNT(*) > 1
-""").show()
+spark.sql("""SELECT id, COUNT(*) FROM lakehouse.cdc.silver_customers GROUP BY id HAVING COUNT(*) > 1""").show()
 ```
 
 ```
@@ -151,6 +146,92 @@ HAVING COUNT(*) > 1
 ```
 
 ## 2. Lakehouse Design
+
+### Schema of each table: Bronze CDC, Silver CDC, Bronze taxi, Silver taxi, Gold — and why each differs from the previous layer.
+
+#### Bronze CDC, Silver CDC
+Tabels differ, because bronze layer has all raw rows Debezium. Silver layer has table for customers and drivers and the data is cleaned. Silver layer stores latest state per entity. 
+
+```
+lakehouse.cdc.bronze_cdc
+root
+ |-- topic: string (nullable = true)
+ |-- kafka_partition: integer (nullable = true)
+ |-- kafka_offset: long (nullable = true)
+ |-- kafka_timestamp: timestamp (nullable = true)
+ |-- op: string (nullable = true)
+ |-- ts_ms: long (nullable = true)
+ |-- lsn: long (nullable = true)
+ |-- before: string (nullable = true)
+ |-- after: string (nullable = true)
+```
+
+```
+lakehouse.cdc.silver_customers
+ |-- id: integer (nullable = true)
+ |-- name: string (nullable = true)
+ |-- email: string (nullable = true)
+ |-- country: string (nullable = true)
+ |-- last_updated_ms: long (nullable = true)
+```
+
+```
+lakehouse.cdc.silver_drivers
+root
+ |-- id: integer (nullable = true)
+ |-- name: string (nullable = true)
+ |-- license_number: string (nullable = true)
+ |-- rating: double (nullable = true)
+ |-- city: string (nullable = true)
+ |-- active: boolean (nullable = true)
+ |-- created_at: string (nullable = true)
+ |-- last_updated_ms: long (nullable = true)
+```
+
+#### Iceberg snapshot history for Silver CDC (query showing multiple MERGE snapshots).
+```
+spark.sql("SELECT * FROM lakehouse.cdc.silver_customers.history").show()
++--------------------+-------------------+-------------------+-------------------+
+|     made_current_at|        snapshot_id|          parent_id|is_current_ancestor|
++--------------------+-------------------+-------------------+-------------------+
+|2026-05-01 08:48:...|6007516179617277881|               NULL|               true|
+|2026-05-01 11:22:...|7939841747190356258|6007516179617277881|               true|
+|2026-05-01 11:29:...|1475400092160512281|7939841747190356258|               true|
++--------------------+-------------------+-------------------+-------------------+
+```
+
+#### Time-travel: Silver CDC at a snapshot before a first MERGE.
+
+Getting current snapshot ID's:
+```
+spark.sql("SELECT snapshot_id, made_current_at FROM lakehouse.cdc.silver_customers.history").show()
++-------------------+--------------------+
+|        snapshot_id|     made_current_at|
++-------------------+--------------------+
+|6007516179617277881|2026-05-01 08:48:...|
+|7939841747190356258|2026-05-01 11:22:...|
+|1475400092160512281|2026-05-01 11:29:...|
++-------------------+--------------------+
+```
+Quering snapshot whit ID 6007516179617277881 (first snapshot before starting simulate.py).
+```
+spark.sql("SELECT * FROM lakehouse.cdc.silver_customers VERSION AS OF 7939841747190356258").show()
++---+--------------+------------------+-----------+---------------+
+| id|          name|             email|    country|last_updated_ms|
++---+--------------+------------------+-----------+---------------+
+|  6|  Frank Muller| frank@example.com|    Germany|  1777624988039|
+|  9| Ingrid Larsen|ingrid@example.com|     Norway|  1777624988040|
+| 10| Javier Garcia|javier@example.com|      Spain|  1777624988040|
+|  2|  Bob Virtanen|   bob@example.com|    Finland|  1777624988036|
+|  4|David Jonaitis| david@example.com|  Lithuania|  1777624988038|
+|  5|  Eva Svensson|   eva@example.com|     Sweden|  1777624988038|
+|  1|    Alice Mets| alice@example.com|    Estonia|  1777624988021|
+|  3|   Carol Ozols| carol@example.com|     Latvia|  1777624988037|
+|  7|     Grace Kim| grace@example.com|South Korea|  1777624988039|
+|  8|   Hiro Tanaka|  hiro@example.com|      Japan|  1777624988039|
++---+--------------+------------------+-----------+---------------+
+```
+
 
 ## 3. Orchestration Design
 
@@ -247,5 +328,31 @@ After optimization, task succeeded consistently. Airflow's retry mechanism handl
 
 ## 5. Custom Scenario
 
-The pipeline reads raw CDC events from lakehouse.cdc.bronze_cdc, filters for customer topic events, and extracts the entity_id from either the after or before JSON depending on the operation type. A window function ordered by ts_ms detects field-level changes by comparing each row's after JSON against the previous row's, flagging email and country changes individually. The aggregation layer groups by entity_id to compute first_seen_ts from the real database created_at timestamp (in microseconds) rather than the Debezium ingestion time, ensuring 2025 business dates are preserved instead of the 2026 replay timestamps. Current status is determined by joining against silver_customers — but ever_deleted takes priority, so a customer who was deleted but still appears in silver is correctly marked as deleted. The gold_customer_activity table captures the full customer lifecycle including total events, field change counts, days since last change, and deletion metadata, while gold_customer_churn materializes as an Iceberg table (since the REST catalog doesn't support views) filtering for customers deleted in the last 24 hours or inactive for 7+ days. The pipeline produced 1156 activity records and correctly identified 48 churned customers matching exactly the 48 delete events generated by the simulator.
+This pipeline processes raw CDC events from `lakehouse.cdc.bronze_cdc` and builds customer activity and churn tables.
+
+The pipeline first filters the raw CDC stream to include only customer topic events. For each event, it extracts `entity_id` from either the `after` or `before` JSON payload, depending on the operation type.
+
+Field-level changes are detected using a window function ordered by `ts_ms`. Each row’s `after` JSON is compared with the previous row for the same customer, allowing the pipeline to detect changes in individual fields, including:
+
+- `email`
+- `country`
+
+The aggregation layer then groups records by `entity_id` and computes lifecycle-level customer metrics. The `first_seen_ts` value is derived from the original database `created_at` timestamp, stored in microseconds, rather than from the Debezium ingestion timestamp. This ensures that the original business timestamps are preserved.
+
+Customer status is determined by joining against `silver_customers`. However, deletion history takes priority: if a customer was ever deleted, they are marked as deleted even if they still appear in `silver_customers`.
+
+#### Results
+
+The pipeline produced **1,156 customer activity records** and correctly identified **48 churned customers**, matching the **48 delete events** generated by the simulator.
+
+The query output for `gold_customer_activity` is available in the notebook [`gold_customer_activity.ipynb`](gold_customer_activity.ipynb). To keep the terminal output clean, the print statement was removed from `gold_customer_activity.py`.
+
+#### Gold Customer activity table
+
+![Gold customer activity](gold_customer_activity.png)
+
+#### Gold Customer Churn table
+
+![Gold customer churn](gold_customer_churn.png)
+
 
