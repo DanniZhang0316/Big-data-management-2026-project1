@@ -35,7 +35,7 @@ with DAG(
         timeout=300
     )
 
-    # CDC PIPELINE (Driver data from PostgreSQL)
+    # CDC PIPELINE (Bronze → Silver → Gold Customer Activity)
     run_bronze_cdc = BashOperator(
         task_id="run_bronze_cdc",
         bash_command="""
@@ -54,6 +54,17 @@ with DAG(
         """
     )
 
+    # CUSTOM SCENARIO - Customer Activity Gold Layer
+    run_gold_customer_activity = BashOperator(
+        task_id="run_gold_customer_activity",
+        bash_command="""
+        docker exec jupyter spark-submit \
+        --packages org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.0,org.apache.iceberg:iceberg-aws-bundle:1.10.0 \
+        /home/jovyan/project/work/gold_customer_activity.py
+        """
+    )
+
+    # TAXI PIPELINE (Bronze → Silver → Gold)
     run_bronze_taxi = BashOperator(
         task_id="run_bronze_taxi",
         bash_command="""
@@ -88,8 +99,8 @@ with DAG(
         """
     )
     
-    # CDC Pipeline: health check → bronze → silver
-    connector_health >> run_bronze_cdc >> run_silver_cdc
+    # CDC Pipeline: health check → bronze → silver → gold customer activity
+    connector_health >> run_bronze_cdc >> run_silver_cdc >> run_gold_customer_activity
 
     # Taxi Pipeline: bronze → silver → gold
     run_bronze_taxi >> run_silver_taxi >> run_gold_taxi
