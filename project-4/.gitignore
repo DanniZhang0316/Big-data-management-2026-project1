@@ -2,3 +2,6 @@ manifest.json
 .ipynb_checkpoints/
 .env
 logs/
+build.log
+__pycache__/
+*.pyc
