@@ -1,16 +1,5 @@
+# Anything not already in /requirements.txt — keep this short to avoid duplicate work.
 # core
 pyyaml>=6.0
 pydantic>=2.0
 rich>=13.0
-
-# db + storage
-psycopg[binary]>=3.2
-pgvector>=0.3
-boto3>=1.35
-requests>=2.32
-
-# ML (optional but safe)
-datasets<3
-huggingface_hub<0.24
-fsspec<2024.4
-sentence-transformers>=3.0

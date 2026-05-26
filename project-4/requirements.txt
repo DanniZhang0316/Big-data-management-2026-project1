@@ -1,3 +1,6 @@
+# CPU-only torch — saves ~6 GB of NVIDIA CUDA wheels we don't use.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 numpy
 pandas
 Pillow
@@ -12,6 +15,7 @@ datasets<3
 huggingface_hub<0.24
 fsspec<2024.4
 
+torch
 open-clip-torch
 sentence-transformers
 

@@ -2,6 +2,8 @@ import itertools
 from io import BytesIO
 from datasets import load_dataset
 
+from src.fingerprint import sha256_bytes
+
 DATASET_NAME = "rootsautomation/RICO-Screen2Words"
 
 
@@ -39,11 +41,14 @@ def ingest_screen(sid, row, s3, conn, run_id, bucket):
     png_key = f"screens/{sid}.png"
     json_key = f"screens/{sid}.json"
 
-    # PNG
+    # PNG (re-encode once so the bytes — and therefore the fingerprint — are deterministic)
     buf = BytesIO()
     row["image"].save(buf, format="PNG")
+    png_bytes = buf.getvalue()
 
-    s3.put_object(Bucket=bucket, Key=png_key, Body=buf.getvalue())
+    source_fingerprint = sha256_bytes(png_bytes)
+
+    s3.put_object(Bucket=bucket, Key=png_key, Body=png_bytes)
 
     # JSON
     s3.put_object(
@@ -57,13 +62,16 @@ def ingest_screen(sid, row, s3, conn, run_id, bucket):
         cur.execute(
             """
             INSERT INTO screens_metadata
-            (screen_id, app_package, category, png_path, hierarchy_json_path, run_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            (screen_id, app_package, category, png_path, hierarchy_json_path,
+             run_id, source_fingerprint, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (screen_id)
             DO UPDATE SET
                 png_path = EXCLUDED.png_path,
                 hierarchy_json_path = EXCLUDED.hierarchy_json_path,
-                run_id = EXCLUDED.run_id
+                run_id = EXCLUDED.run_id,
+                source_fingerprint = EXCLUDED.source_fingerprint,
+                updated_at = NOW()
             """,
             (
                 sid,
@@ -71,7 +79,8 @@ def ingest_screen(sid, row, s3, conn, run_id, bucket):
                 row["category"],
                 png_key,
                 json_key,
-                run_id
+                run_id,
+                source_fingerprint,
             )
         )
 

@@ -6,8 +6,9 @@ RUN apt-get update \
        openjdk-17-jre-headless procps \
     && rm -rf /var/lib/apt/lists/*
 
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
-ENV PATH="${JAVA_HOME}/bin:${PATH}"
+# JAVA_HOME path differs between arm64 and amd64 images. Resolve it dynamically.
+RUN echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> /etc/profile.d/java.sh
+ENV PATH="/usr/lib/jvm/default-java/bin:${PATH}"
 
 USER airflow
 
