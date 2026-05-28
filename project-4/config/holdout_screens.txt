@@ -1,0 +1,8 @@
+# Holdout screens for eval (Recall@5)
+# Derived from chosen_screens.txt for now.
+
+2
+26
+37
+41
+50

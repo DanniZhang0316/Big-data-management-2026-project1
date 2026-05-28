@@ -25,10 +25,18 @@ from src.extraction import (
     PROMPT_VERSION,
     OLLAMA_MODEL,
 )
+from src.evaluation import compute_recall_at_k, load_holdout_ids
 from src.loading import (
     upsert_embeddings,
     upsert_extractions,
     stamp_run_versions,
+)
+from src.metrics import (
+    Metric,
+    collect_data_quality_metrics,
+    collect_task_metrics,
+    format_summary,
+    upsert_metrics,
 )
 
 
@@ -252,7 +260,90 @@ with DAG(
     )
 
     # -------------------------
+    # AUDIT (placeholder until Engineer C lands the real audit task)
+    # -------------------------
+    def audit_placeholder(**context):
+        run_id = context["ti"].xcom_pull(task_ids="init_run", key="run_id")
+        print(f"[audit] placeholder pass for run_id={run_id}")
+        return "audit_placeholder_pass"
+
+    audit_task = PythonOperator(
+        task_id="audit",
+        python_callable=audit_placeholder,
+    )
+
+    # -------------------------
+    # EVAL (Recall@5)
+    # -------------------------
+    def evaluate(**context):
+        run_id = context["ti"].xcom_pull(task_ids="init_run", key="run_id")
+        holdout_ids = load_holdout_ids("/opt/airflow/config/holdout_screens.txt")
+
+        conn = get_postgres()
+        try:
+            result = compute_recall_at_k(conn, holdout_ids, k=5)
+            upsert_metrics(
+                conn,
+                run_id,
+                [
+                    Metric(
+                        name="recall_at_5",
+                        value=result.recall_at_k,
+                        labels={
+                            "relevance": "same_app_package",
+                            "embedding_kind": "text",
+                        },
+                    ),
+                    Metric(name="eval_total", value=float(result.total)),
+                    Metric(name="eval_skipped", value=float(result.skipped)),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        context["ti"].xcom_push("recall_at_5", result.recall_at_k)
+        context["ti"].xcom_push("eval_total", result.total)
+        context["ti"].xcom_push("eval_skipped", result.skipped)
+
+    eval_task = PythonOperator(
+        task_id="eval",
+        python_callable=evaluate,
+    )
+
+    # -------------------------
+    # METRICS (health + data quality)
+    # -------------------------
+    def collect_metrics(**context):
+        run_id = context["ti"].xcom_pull(task_ids="init_run", key="run_id")
+
+        conn = get_postgres()
+        try:
+            task_metrics = collect_task_metrics(context)
+            data_quality_metrics = collect_data_quality_metrics(conn, run_id)
+            upsert_metrics(conn, run_id, task_metrics + data_quality_metrics)
+            conn.commit()
+        finally:
+            conn.close()
+
+        recall_at_5 = context["ti"].xcom_pull(task_ids="eval", key="recall_at_5")
+        eval_total = context["ti"].xcom_pull(task_ids="eval", key="eval_total")
+        eval_skipped = context["ti"].xcom_pull(task_ids="eval", key="eval_skipped")
+
+        summary = format_summary(data_quality_metrics)
+        print(
+            f"{summary} recall_at_5={recall_at_5} "
+            f"eval_total={eval_total} eval_skipped={eval_skipped}"
+        )
+
+    metrics_task = PythonOperator(
+        task_id="metrics",
+        python_callable=collect_metrics,
+    )
+
+    # -------------------------
     # DAG FLOW
     # -------------------------
     init_task >> ingest_task >> parse_task
     parse_task >> [embed_image_task, embed_text_task, extract_task] >> load_task
+    load_task >> audit_task >> eval_task >> metrics_task

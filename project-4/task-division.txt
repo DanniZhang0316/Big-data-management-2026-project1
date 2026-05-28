@@ -1,0 +1,106 @@
+5713 1505, +372 5905 3401, You
+5/14/2026
+5/14/2026
+Ahmad
++372 5390 4395
+i will ask this question - For the IVF algorithm, how exactly do we balance speed and accuracy?
+14:22
+Terje
++372 5905 3401
+Hi. There are multiple problems coming up when running the notebook multiple times. As the fix would be change the code in the notebook, it would't work for sharing the notebook. Because all notebooks would have same change in code. 
+I managed to do deduplication, but now get json error :D
+16:35
+
+😢
+Terje
++372 5905 3401
+seminar_7.ipynb
+IPYNB•82 kB
+Seems is managed to do it. But there is one cell in the beginning that i know i changed to get it work with windows. but  we can say that we shared a trick to solve the problem . You can convert it online and i suggest change the name :)
+16:40
+
+❤️
+🙏
+3
+Danni Zhang
++372 5713 1505
+Thank u soooo much!!!
+16:41
+Terje
++372 5905 3401
+And i mean change the file name
+16:45
+
+👍
+Danni Zhang
++372 5713 1505
+Heyyy guys we should find a time to assign the project tasks
+19:30
+I also wanted to ask if it would be okay for me to take the final or sec final step of the pipeline. I’ll be extremely busy next week, so being the last one in the sequence would really help me🫣
+19:35
+Terje
++372 5905 3401
+At the moment, i can start after 20th with the project
+21:33
+
+👍
+5/18/2026
+Hey, it seems sooner or later we should start the project so there is division by Gemini if you accept it...
+16:07
+Engineer A: The Core Orchestrator & Infrastructure (The Backbone)
+This engineer owns the Airflow environment, the skeleton of the DAG, and the critical data injection layer.
+
+Primary Tasks:
+
+Set up pyproject.toml, Docker/Airflow configurations, and repository structure.
+
+Create the core pipeline_runs management utility (a helper class/context manager to initialize a run_id, log metadata like Git SHA/Model versions, and update status to SUCCESS or FAILED).
+
+Build the skeleton DAG (wiring up the tasks, setting up parallel execution for the middle tasks, implementing the LIMIT parameter).
+
+Implement the Ingest and Parse stages (handling MinIO object generation and parsing HTML/view hierarchies safely).
+
+Key Handoff: Provides the active run_id and the overall DAG structure to the rest of the team.
+
+🥈 Engineer B: The ML & Idempotent Load Engineer (The Heavy Lifter)
+This engineer is responsible for processing the data using the models from the lab and ensuring data safely lands in the database without duplicates.
+
+Primary Tasks:
+
+Port over the business logic from the lab notebook for embed_image (CLIP), embed_text (SBERT), and extract (Ollama/LLM).
+
+Implement the Load stage into Postgres (screens_metadata and screens_embeddings).
+
+Crucial Focus: Owns Idempotency and Traceability. They must generate the source_fingerprint (SHA-256 of PNG bytes / text inputs) and write the INSERT ... ON CONFLICT DO NOTHING / UPDATE SQL queries to ensure re-runs don't break or duplicate data.
+
+Key Handoff: Ensures that data is cleanly landing in the destination tables with run_id and source_fingerprint properly populated.
+
+🥉 Engineer C: The Gatekeeper (Audit & Slack Alerts)
+This engineer owns the safety features of the pipeline. They ensure bad data never propagates and that the team is alerted when things break.
+
+Primary Tasks:
+
+Build the Audit task (the circuit breaker). Write the raw SQL queries that scan screens_embeddings and screens_metadata for duplicates within the current run.
+
+Ensure that if the audit fails, an explicit Airflow exception is thrown to halt the DAG before the eval stage.
+
+(Bonus) Implement the audit_results table logging.
+
+Build the Slack Notification system using incoming webhooks. Write the wrapper logic (try/except) so Slack errors don't crash the pipeline, and style the three required alerts (Started, Failed Audit, Finished).
+
+Key Handoff: Provides the defensive wall that hooks directly between Engineer B's load task and Engineer D's evaluation task.
+
+🏅 (mine)Engineer D: The Analyst (Metrics, Evaluation, & Documentation)
+This engineer focuses on data quality, pipeline telemetry, and showing proof that the system works.
+
+Primary Tasks:
+
+Implement the Eval stage (Recall@5 with a holdout set based on the lab notebook).
+
+Build the Pipeline Health Metrics collection (tracking task durations, rows in/out via XComs or DB queries, and retries).
+
+Build the Data Quality Metrics SQL queries (calculating non-null extraction %, confidence boundaries, vector norm checks, and distinct app/category checks).
+
+Create the pipeline_metrics table logic and the "one-screen-tall" summary log output at the end of the run.
+
+Own the project README (explaining how to boot it, metric definitions, and how to triage an audit failure).
