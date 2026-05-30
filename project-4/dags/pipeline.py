@@ -89,6 +89,23 @@ def _on_dag_failure(context):
     except Exception:
         pass
 
+    if run_id:
+        conn = get_postgres()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE pipeline_runs
+                    SET status = %s,
+                        ended_at = %s
+                    WHERE run_id = %s
+                    """,
+                    ("FAILED", datetime.utcnow(), run_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     notify_run_failed(
         run_id=run_id or "(run_id unavailable)",
         failed_task_id=failed_task_id,
@@ -140,6 +157,22 @@ with DAG(
         # Determine how this run was triggered ("manual", "scheduled", etc.)
         dag_run = context.get("dag_run")
         trigger = str(getattr(dag_run, "run_type", "manual"))
+
+        if dag_run is not None:
+            conn = get_postgres()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE pipeline_runs
+                        SET dag_run_id = %s
+                        WHERE run_id = %s
+                        """,
+                        (dag_run.run_id, run.run_id),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
 
         notify_started(run.run_id, limit, trigger)
 
@@ -447,6 +480,22 @@ with DAG(
             f"{summary_line} recall_at_5={recall_at_5} "
             f"eval_total={eval_total} eval_skipped={eval_skipped}"
         )
+
+        conn = get_postgres()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE pipeline_runs
+                    SET status = %s,
+                        ended_at = %s
+                    WHERE run_id = %s
+                    """,
+                    ("SUCCESS", datetime.utcnow(), run_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
         notify_finished(
             run_id=run_id,
